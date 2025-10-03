@@ -22,6 +22,7 @@ cd cognigy-backup-{project-name}
 ./scripts/setup-interactive.sh
 
 # Commit configuration
+git add -f config.json  # Force add (it's in .gitignore)
 git add .
 git commit -m "Configure backup [skip-setup]"
 git push

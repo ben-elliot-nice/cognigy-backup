@@ -74,12 +74,16 @@ The script creates/modifies:
 ### 2.4 Commit Configuration
 
 ```bash
+git add -f config.json  # Force add (it's in .gitignore)
 git add .
 git commit -m "Configure backup for {project-name} [skip-setup]"
 git push
 ```
 
-**Note**: The `[skip-setup]` tag prevents the setup workflow from running again.
+**Important Notes:**
+- The `-f` flag is required because `config.json` is in `.gitignore`
+- The `[skip-setup]` tag prevents the setup workflow from running again
+- The committed config.json does NOT contain credentials (only retention settings)
 
 ---
 

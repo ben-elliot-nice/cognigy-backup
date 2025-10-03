@@ -6,8 +6,11 @@ on:
 
 jobs:
   setup:
-    # Only run if config.json doesn't exist and commit doesn't skip setup
-    if: ${{ !contains(github.event.head_commit.message, '[skip-setup]') }}
+    # Only run if:
+    # 1. Not the template repo itself (cognigy-backup)
+    # 2. config.json doesn't exist
+    # 3. Commit doesn't skip setup
+    if: ${{ github.repository != 'ben-elliot-nice/cognigy-backup' && !contains(github.event.head_commit.message, '[skip-setup]') }}
     runs-on: ubuntu-latest
 
     permissions:
@@ -75,6 +78,7 @@ jobs:
             ./scripts/setup-interactive.sh
 
             # Commit and push configuration
+            git add -f config.json  # Force add (it's in .gitignore)
             git add .
             git commit -m "Configure backup [skip-setup]"
             git push
