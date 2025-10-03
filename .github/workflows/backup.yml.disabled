@@ -107,6 +107,9 @@ jobs:
           if [ "$CLONE_TYPE" = "agent" ]; then
             cognigy clone -y || {
               echo "::error::cognigy clone command failed with exit code $?"
+              echo "::group::Debug: config.json contents"
+              cat config.json
+              echo "::endgroup::"
               echo "::group::Listing directory contents"
               ls -la
               echo "::endgroup::"
@@ -115,6 +118,9 @@ jobs:
           else
             cognigy clone --type "$CLONE_TYPE" -y || {
               echo "::error::cognigy clone command failed with exit code $?"
+              echo "::group::Debug: config.json contents"
+              cat config.json
+              echo "::endgroup::"
               echo "::group::Listing directory contents"
               ls -la
               echo "::endgroup::"
