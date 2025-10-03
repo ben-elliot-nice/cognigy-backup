@@ -1,0 +1,173 @@
+name: Backup to Snapshot
+
+on:
+  schedule:
+    # Default: every 6 hours (0:00, 6:00, 12:00, 18:00 UTC)
+    # Change this to adjust backup frequency:
+    # - Every hour: '0 * * * *'
+    # - Every 30 min: '*/30 * * * *'
+    # - Every 12 hours: '0 0,12 * * *'
+    - cron: '0 */6 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load configuration
+        id: config
+        run: |
+          if [ ! -f "config.json" ]; then
+            echo "::error::config.json not found. Run setup script first."
+            exit 1
+          fi
+
+          # Load config
+          HOURLY_COUNT=$(jq -r '.retention.hourly.count // 8' config.json)
+          CLONE_TYPE=$(jq -r '.backup.cloneType // "agent"' config.json)
+          PROJECT_NAME=$(jq -r '.projectName // "unknown"' config.json)
+          AGENT_DIR=$(jq -r '.agentDir // "agent"' config.json)
+
+          echo "hourly_count=$HOURLY_COUNT" >> $GITHUB_OUTPUT
+          echo "clone_type=$CLONE_TYPE" >> $GITHUB_OUTPUT
+          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+          echo "agent_dir=$AGENT_DIR" >> $GITHUB_OUTPUT
+
+          echo "::notice::Backing up $PROJECT_NAME (clone type: $CLONE_TYPE)"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache Cognigy CLI
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-cognigy-cli
+          restore-keys: |
+            ${{ runner.os }}-cognigy-cli-
+
+      - name: Install Cognigy CLI
+        run: npm install -g @cognigy/cognigy-cli
+
+      - name: Clone Cognigy project
+        env:
+          CAI_BASEURL: ${{ secrets.COGNIGY_BASE_URL }}
+          CAI_APIKEY: ${{ secrets.COGNIGY_API_KEY }}
+          CAI_AGENT: ${{ secrets.COGNIGY_AGENT_ID }}
+          CAI_AGENTDIR: ${{ steps.config.outputs.agent_dir }}
+        run: |
+          echo "::group::Cloning Cognigy project"
+
+          # Clone based on configured type
+          CLONE_TYPE="${{ steps.config.outputs.clone_type }}"
+
+          if [ "$CLONE_TYPE" = "agent" ]; then
+            cognigy clone -y
+          else
+            cognigy clone --type "$CLONE_TYPE" -y
+          fi
+
+          echo "::endgroup::"
+
+          # Verify clone succeeded
+          if [ ! -d "$CAI_AGENTDIR" ]; then
+            echo "::error::Clone failed - $CAI_AGENTDIR directory not created"
+            exit 1
+          fi
+
+          echo "::notice::Clone completed successfully"
+
+      - name: Detect changes
+        id: changes
+        run: |
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage agent directory (force add since it's in .gitignore)
+          git add -f ${{ steps.config.outputs.agent_dir }}/
+
+          # Check if there are changes
+          if git diff --cached --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "::notice::No changes detected - skipping snapshot"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+
+            # Count changed files
+            CHANGED_FILES=$(git diff --cached --numstat | wc -l)
+            echo "file_count=$CHANGED_FILES" >> $GITHUB_OUTPUT
+            echo "::notice::Detected changes in $CHANGED_FILES files"
+          fi
+
+      - name: Create snapshot
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          echo "::group::Creating snapshot"
+
+          # Create orphan branch for snapshot
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          git checkout --orphan temp-snapshot
+
+          # Force add agent directory (ignored on main)
+          git add -f ${{ steps.config.outputs.agent_dir }}/
+
+          # Add metadata
+          cat > .backup-metadata.json <<EOF
+          {
+            "timestamp": "$TIMESTAMP",
+            "tier": "hourly",
+            "project": "${{ steps.config.outputs.project_name }}",
+            "commit_sha": "${{ github.sha }}",
+            "workflow_run": "${{ github.run_id }}",
+            "changed_files": ${{ steps.changes.outputs.file_count }}
+          }
+          EOF
+
+          git add .backup-metadata.json
+
+          # Commit snapshot
+          git commit -m "Snapshot: $TIMESTAMP
+
+          Project: ${{ steps.config.outputs.project_name }}
+          Changed files: ${{ steps.changes.outputs.file_count }}
+          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # Push to snapshot/hourly branch
+          git push -f origin temp-snapshot:snapshot/hourly
+
+          echo "::endgroup::"
+          echo "::notice::Snapshot created and pushed to snapshot/hourly"
+
+      - name: Cleanup temp branch
+        if: always()
+        run: |
+          # Return to main and cleanup
+          git checkout main 2>/dev/null || git checkout -b main
+          git branch -D temp-snapshot 2>/dev/null || true
+
+      - name: Calculate snapshot size
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          AGENT_SIZE=$(du -sh ${{ steps.config.outputs.agent_dir }} | cut -f1)
+          echo "::notice::Snapshot size: $AGENT_SIZE"
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.changes.outputs.changed }}" = "true" ]; then
+            echo "✅ Backup completed successfully"
+            echo "📦 Created snapshot on snapshot/hourly branch"
+            echo "📊 Changed files: ${{ steps.changes.outputs.file_count }}"
+          else
+            echo "ℹ️ No changes detected - backup skipped"
+          fi

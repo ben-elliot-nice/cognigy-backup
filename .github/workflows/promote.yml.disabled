@@ -1,0 +1,192 @@
+name: Promote Snapshots
+
+on:
+  schedule:
+    # Daily at midnight UTC (hourly → daily)
+    - cron: '0 0 * * *'
+    # Weekly on Sunday at midnight UTC (daily → weekly)
+    - cron: '0 0 * * 0'
+    # Monthly on 1st at midnight UTC (weekly → monthly release)
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Which promotion to run'
+        required: true
+        type: choice
+        options:
+          - daily
+          - weekly
+          - monthly
+
+jobs:
+  promote-daily:
+    if: ${{ github.event.schedule == '0 0 * * *' || github.event.inputs.tier == 'daily' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load configuration
+        id: config
+        run: |
+          DAILY_ENABLED=$(jq -r '.retention.daily.enabled // true' config.json)
+          DAILY_COUNT=$(jq -r '.retention.daily.count // 7' config.json)
+
+          echo "daily_enabled=$DAILY_ENABLED" >> $GITHUB_OUTPUT
+          echo "daily_count=$DAILY_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Promote hourly to daily
+        if: steps.config.outputs.daily_enabled == 'true'
+        run: |
+          echo "::group::Promoting hourly snapshot to daily"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Fetch latest hourly snapshot
+          git fetch origin snapshot/hourly
+
+          # Create dated daily branch
+          DATE=$(date -u +%Y%m%d)
+          BRANCH_NAME="snapshot/daily/$DATE"
+
+          # Check if today's daily snapshot already exists
+          if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
+            echo "::notice::Daily snapshot for $DATE already exists, skipping"
+            exit 0
+          fi
+
+          # Push hourly snapshot to new daily branch
+          git push origin origin/snapshot/hourly:refs/heads/$BRANCH_NAME
+
+          echo "::notice::Created daily snapshot: $BRANCH_NAME"
+          echo "::endgroup::"
+
+  promote-weekly:
+    if: ${{ github.event.schedule == '0 0 * * 0' || github.event.inputs.tier == 'weekly' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load configuration
+        id: config
+        run: |
+          WEEKLY_ENABLED=$(jq -r '.retention.weekly.enabled // true' config.json)
+          WEEKLY_COUNT=$(jq -r '.retention.weekly.count // 4' config.json)
+
+          echo "weekly_enabled=$WEEKLY_ENABLED" >> $GITHUB_OUTPUT
+          echo "weekly_count=$WEEKLY_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Promote daily to weekly
+        if: steps.config.outputs.weekly_enabled == 'true'
+        run: |
+          echo "::group::Promoting daily snapshot to weekly"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Get most recent daily branch
+          git fetch origin 'refs/heads/snapshot/daily/*:refs/remotes/origin/snapshot/daily/*'
+
+          LATEST_DAILY=$(git branch -r | grep 'origin/snapshot/daily/' | sort -r | head -n 1 | xargs)
+
+          if [ -z "$LATEST_DAILY" ]; then
+            echo "::warning::No daily snapshots found to promote"
+            exit 0
+          fi
+
+          # Create week identifier (ISO week: YYYY-Wxx)
+          WEEK=$(date -u +%Y-W%V)
+          BRANCH_NAME="snapshot/weekly/$WEEK"
+
+          # Check if this week's snapshot already exists
+          if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
+            echo "::notice::Weekly snapshot for $WEEK already exists, skipping"
+            exit 0
+          fi
+
+          # Push latest daily to new weekly branch
+          git push origin "$LATEST_DAILY":refs/heads/"$BRANCH_NAME"
+
+          echo "::notice::Created weekly snapshot: $BRANCH_NAME (from $LATEST_DAILY)"
+          echo "::endgroup::"
+
+  promote-monthly:
+    if: ${{ github.event.schedule == '0 0 1 * *' || github.event.inputs.tier == 'monthly' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load configuration
+        id: config
+        run: |
+          MONTHLY_ENABLED=$(jq -r '.retention.monthly.enabled // true' config.json)
+          MONTHLY_COUNT=$(jq -r '.retention.monthly.count // 12' config.json)
+          PROJECT_NAME=$(jq -r '.projectName // "unknown"' config.json)
+
+          echo "monthly_enabled=$MONTHLY_ENABLED" >> $GITHUB_OUTPUT
+          echo "monthly_count=$MONTHLY_COUNT" >> $GITHUB_OUTPUT
+          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+
+      - name: Promote weekly to monthly release
+        if: steps.config.outputs.monthly_enabled == 'true'
+        run: |
+          echo "::group::Creating monthly GitHub Release"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Get most recent weekly branch
+          git fetch origin 'refs/heads/snapshot/weekly/*:refs/remotes/origin/snapshot/weekly/*'
+
+          LATEST_WEEKLY=$(git branch -r | grep 'origin/snapshot/weekly/' | sort -r | head -n 1 | xargs)
+
+          if [ -z "$LATEST_WEEKLY" ]; then
+            echo "::warning::No weekly snapshots found to promote"
+            exit 0
+          fi
+
+          # Create month identifier (YYYY-MM)
+          MONTH=$(date -u +%Y-%m)
+          TAG_NAME="monthly-$MONTH"
+          RELEASE_TITLE="Monthly Backup - $MONTH"
+
+          # Check if this month's release already exists
+          if gh release view "$TAG_NAME" &>/dev/null; then
+            echo "::notice::Monthly release for $MONTH already exists, skipping"
+            exit 0
+          fi
+
+          # Create release from latest weekly snapshot
+          gh release create "$TAG_NAME" \
+            --title "$RELEASE_TITLE" \
+            --notes "Automated monthly snapshot for ${{ steps.config.outputs.project_name }}
+
+          **Snapshot Details:**
+          - Created: $(date -u)
+          - Source: $LATEST_WEEKLY
+          - Project: ${{ steps.config.outputs.project_name }}
+          - Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          To restore from this snapshot, use the restore workflow or download the release and restore manually." \
+            --target "$LATEST_WEEKLY"
+
+          echo "::notice::Created monthly release: $TAG_NAME (from $LATEST_WEEKLY)"
+          echo "::endgroup::"
+        env:
+          GH_TOKEN: ${{ github.token }}

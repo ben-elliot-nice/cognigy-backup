@@ -1,0 +1,38 @@
+# Cognigy Backup Template - .gitignore
+
+# Actual config with credentials (only example should be committed)
+config.json
+
+# Agent data (only exists after clone, lives on snapshot branches)
+# Will be force-added to snapshot branches via workflows
+agent/
+
+# Node modules (if any scripts need dependencies)
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+.backup-metadata.json
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.local
+.env.*.local

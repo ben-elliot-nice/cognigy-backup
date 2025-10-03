@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "description": "Cognigy Backup Configuration - Copy this to config.json and fill in your values",
+
+  "projectName": "my-cognigy-project",
+  "agentDir": "agent",
+
+  "retention": {
+    "hourly": {
+      "enabled": true,
+      "count": 6,
+      "intervalMinutes": 30,
+      "description": "Short-term snapshots - default every 30 min (last 3 hours total)"
+    },
+    "daily": {
+      "enabled": true,
+      "count": 7,
+      "intervalHours": 6,
+      "description": "Medium-term snapshots - promoted from hourly every 6 hours (last 7 days total)"
+    },
+    "weekly": {
+      "enabled": true,
+      "count": 4,
+      "description": "Long-term snapshots - promoted from daily every Sunday (last 4 weeks total)"
+    },
+    "monthly": {
+      "enabled": true,
+      "count": 12,
+      "description": "Archive snapshots - GitHub Release created on first of month (last 12 months total)"
+    }
+  },
+
+  "backup": {
+    "cloneType": "agent",
+    "excludeResources": [],
+    "comment": "cloneType can be: agent (full), flows, endpoints, lexicons, aiAgents"
+  },
+
+  "notifications": {
+    "enabled": false,
+    "webhookUrl": "",
+    "notifyOnFailure": true,
+    "notifyOnSuccess": false,
+    "dailySummary": false
+  }
+}

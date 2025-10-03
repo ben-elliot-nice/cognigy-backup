@@ -1,0 +1,165 @@
+name: Cleanup Old Snapshots
+
+on:
+  schedule:
+    # Daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load configuration
+        id: config
+        run: |
+          HOURLY_COUNT=$(jq -r '.retention.hourly.count // 8' config.json)
+          DAILY_COUNT=$(jq -r '.retention.daily.count // 7' config.json)
+          WEEKLY_COUNT=$(jq -r '.retention.weekly.count // 4' config.json)
+          MONTHLY_COUNT=$(jq -r '.retention.monthly.count // 12' config.json)
+
+          echo "hourly_count=$HOURLY_COUNT" >> $GITHUB_OUTPUT
+          echo "daily_count=$DAILY_COUNT" >> $GITHUB_OUTPUT
+          echo "weekly_count=$WEEKLY_COUNT" >> $GITHUB_OUTPUT
+          echo "monthly_count=$MONTHLY_COUNT" >> $GITHUB_OUTPUT
+
+          echo "::notice::Retention policy: hourly=$HOURLY_COUNT, daily=$DAILY_COUNT, weekly=$WEEKLY_COUNT, monthly=$MONTHLY_COUNT"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Cleanup daily snapshots
+        run: |
+          echo "::group::Cleaning up daily snapshots"
+
+          # Fetch all daily branches
+          git fetch origin 'refs/heads/snapshot/daily/*:refs/remotes/origin/snapshot/daily/*'
+
+          # List all daily branches, sorted by date (newest first)
+          DAILY_BRANCHES=$(git branch -r | grep 'origin/snapshot/daily/' | sed 's|origin/||' | sort -r)
+
+          if [ -z "$DAILY_BRANCHES" ]; then
+            echo "::notice::No daily snapshots found"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Count total daily branches
+          TOTAL=$(echo "$DAILY_BRANCHES" | wc -l)
+          KEEP_COUNT=${{ steps.config.outputs.daily_count }}
+
+          echo "Found $TOTAL daily snapshots, keeping newest $KEEP_COUNT"
+
+          if [ $TOTAL -le $KEEP_COUNT ]; then
+            echo "::notice::No daily snapshots to clean up"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Delete old branches (keep only the newest KEEP_COUNT)
+          echo "$DAILY_BRANCHES" | tail -n +$((KEEP_COUNT + 1)) | while read branch; do
+            echo "Deleting old daily snapshot: $branch"
+            git push origin --delete "$branch" || echo "Failed to delete $branch"
+          done
+
+          echo "::endgroup::"
+
+      - name: Cleanup weekly snapshots
+        run: |
+          echo "::group::Cleaning up weekly snapshots"
+
+          # Fetch all weekly branches
+          git fetch origin 'refs/heads/snapshot/weekly/*:refs/remotes/origin/snapshot/weekly/*'
+
+          # List all weekly branches, sorted (newest first)
+          WEEKLY_BRANCHES=$(git branch -r | grep 'origin/snapshot/weekly/' | sed 's|origin/||' | sort -r)
+
+          if [ -z "$WEEKLY_BRANCHES" ]; then
+            echo "::notice::No weekly snapshots found"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Count total weekly branches
+          TOTAL=$(echo "$WEEKLY_BRANCHES" | wc -l)
+          KEEP_COUNT=${{ steps.config.outputs.weekly_count }}
+
+          echo "Found $TOTAL weekly snapshots, keeping newest $KEEP_COUNT"
+
+          if [ $TOTAL -le $KEEP_COUNT ]; then
+            echo "::notice::No weekly snapshots to clean up"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Delete old branches
+          echo "$WEEKLY_BRANCHES" | tail -n +$((KEEP_COUNT + 1)) | while read branch; do
+            echo "Deleting old weekly snapshot: $branch"
+            git push origin --delete "$branch" || echo "Failed to delete $branch"
+          done
+
+          echo "::endgroup::"
+
+      - name: Cleanup monthly releases
+        run: |
+          echo "::group::Cleaning up monthly releases"
+
+          # List all monthly releases, sorted (newest first)
+          RELEASES=$(gh release list --limit 100 | grep 'monthly-' | awk '{print $1}' | sort -r)
+
+          if [ -z "$RELEASES" ]; then
+            echo "::notice::No monthly releases found"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Count total releases
+          TOTAL=$(echo "$RELEASES" | wc -l)
+          KEEP_COUNT=${{ steps.config.outputs.monthly_count }}
+
+          echo "Found $TOTAL monthly releases, keeping newest $KEEP_COUNT"
+
+          if [ $TOTAL -le $KEEP_COUNT ]; then
+            echo "::notice::No monthly releases to clean up"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Delete old releases
+          echo "$RELEASES" | tail -n +$((KEEP_COUNT + 1)) | while read tag; do
+            echo "Deleting old monthly release: $tag"
+            gh release delete "$tag" --yes || echo "Failed to delete release $tag"
+          done
+
+          echo "::endgroup::"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Run git garbage collection
+        run: |
+          echo "::group::Running git garbage collection"
+
+          # This helps GitHub reclaim storage from deleted branches/commits
+          git reflog expire --expire=now --all || true
+          git gc --prune=now --aggressive || true
+
+          echo "::notice::Garbage collection complete"
+          echo "::endgroup::"
+
+      - name: Summary
+        run: |
+          echo "✅ Cleanup completed"
+          echo ""
+          echo "Retention policy enforced:"
+          echo "  - Daily snapshots: ${{ steps.config.outputs.daily_count }} kept"
+          echo "  - Weekly snapshots: ${{ steps.config.outputs.weekly_count }} kept"
+          echo "  - Monthly releases: ${{ steps.config.outputs.monthly_count }} kept"

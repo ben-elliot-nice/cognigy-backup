@@ -1,0 +1,145 @@
+name: Initial Setup
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  setup:
+    # Only run if config.json doesn't exist and commit doesn't skip setup
+    if: ${{ !contains(github.event.head_commit.message, '[skip-setup]') }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check if already configured
+        id: check
+        run: |
+          if [ -f "config.json" ]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "::notice::config.json exists, skipping setup"
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create setup issue
+        if: steps.check.outputs.configured == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚀 Complete Cognigy Backup Setup',
+              labels: ['setup', 'documentation'],
+              body: `## Welcome to Cognigy Backup!
+
+            This repository was created from the template and needs configuration before automated backups can start.
+
+            ---
+
+            ## 📋 Setup Checklist
+
+            ### Step 1: Add GitHub Secrets
+
+            Go to **Settings** → **Secrets and variables** → **Actions** and add:
+
+            | Secret Name | Description | Example |
+            |-------------|-------------|---------|
+            | \`COGNIGY_BASE_URL\` | Your Cognigy API endpoint | \`https://api-app.cognigy.ai\` |
+            | \`COGNIGY_API_KEY\` | Your Cognigy API key | \`apikey-xxx-yyy-zzz\` |
+            | \`COGNIGY_AGENT_ID\` | Your Cognigy project/agent ID | \`507f1f77bcf86cd799439011\` |
+
+            **Finding your values:**
+            - **Base URL**: Check your Cognigy instance URL (trial: \`https://api-trial.cognigy.ai\`, production: \`https://api-app.cognigy.ai\`)
+            - **API Key**: Cognigy.AI → User Menu → My Profile → API Keys
+            - **Agent ID**: Open your project in Cognigy, look at the URL or Project Settings
+
+            ### Step 2: Run Setup Script Locally
+
+            \`\`\`bash
+            # Clone this repository
+            git clone ${context.payload.repository.clone_url}
+            cd ${context.repo.repo}
+
+            # Make setup script executable
+            chmod +x scripts/setup-interactive.sh
+
+            # Run interactive setup
+            ./scripts/setup-interactive.sh
+
+            # Commit and push configuration
+            git add .
+            git commit -m "Configure backup [skip-setup]"
+            git push
+            \`\`\`
+
+            **Note:** The \`[skip-setup]\` tag prevents this setup workflow from running again.
+
+            ### Step 3: Verify Workflows Activated
+
+            After pushing your configuration, check that these files exist:
+            - \`.github/workflows/backup.yml\` (renamed from \`.disabled\`)
+            - \`.github/workflows/promote.yml\`
+            - \`.github/workflows/cleanup.yml\`
+            - \`.github/workflows/restore.yml\`
+
+            ### Step 4: Enable Workflows
+
+            1. Go to **Actions** tab
+            2. Enable workflows if prompted
+            3. Manually trigger **Backup to Snapshot** workflow to test
+
+            ### Step 5: Verify First Backup
+
+            After the workflow runs:
+            \`\`\`bash
+            git fetch origin
+            git branch -r | grep snapshot
+            # Should see: origin/snapshot/hourly
+            \`\`\`
+
+            ---
+
+            ## 📚 Documentation
+
+            - **[Setup Guide](docs/SETUP-GUIDE.md)** - Detailed step-by-step instructions
+            - **[Configuration](config.json.example)** - Example configuration file
+            - **[README](README.md)** - Quick start and overview
+
+            ---
+
+            ## ✅ Once Setup is Complete
+
+            - [ ] GitHub Secrets configured
+            - [ ] Setup script run locally
+            - [ ] \`config.json\` committed
+            - [ ] Workflows activated (files renamed from \`.disabled\`)
+            - [ ] First manual backup successful
+            - [ ] \`snapshot/hourly\` branch exists
+            - [ ] Scheduled backups enabled
+
+            **Close this issue once all steps are complete!**
+
+            ---
+
+            ## 🆘 Need Help?
+
+            - Check the [Setup Guide](docs/SETUP-GUIDE.md) for troubleshooting
+            - Review [Architecture docs](docs/ARCHITECTURE.md) for technical details
+            - Consult [Cognigy CLI documentation](https://www.npmjs.com/package/@cognigy/cognigy-cli)
+            `
+            });
+
+            console.log('Created setup issue #' + issue.data.number);
+
+      - name: Setup complete
+        if: steps.check.outputs.configured == 'true'
+        run: |
+          echo "::notice::Repository already configured. If you need to reconfigure, delete config.json and push."

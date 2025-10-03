@@ -1,0 +1,209 @@
+name: Restore Backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Snapshot tier to restore from'
+        required: true
+        type: choice
+        options:
+          - hourly
+          - daily
+          - weekly
+          - monthly
+      snapshot_id:
+        description: 'Specific snapshot (leave blank for latest). For daily: YYYYMMDD, for weekly: YYYY-Wxx, for monthly: YYYY-MM'
+        required: false
+        type: string
+      dry_run:
+        description: 'Dry run (show what would be restored without actually restoring)'
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    # Uncomment to require manual approval:
+    # environment: production-restore
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load configuration
+        id: config
+        run: |
+          AGENT_DIR=$(jq -r '.agentDir // "agent"' config.json)
+          PROJECT_NAME=$(jq -r '.projectName // "unknown"' config.json)
+
+          echo "agent_dir=$AGENT_DIR" >> $GITHUB_OUTPUT
+          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+
+      - name: Determine snapshot to restore
+        id: snapshot
+        run: |
+          TIER="${{ github.event.inputs.tier }}"
+          SNAPSHOT_ID="${{ github.event.inputs.snapshot_id }}"
+
+          echo "::group::Determining snapshot to restore"
+
+          case "$TIER" in
+            hourly)
+              BRANCH="snapshot/hourly"
+              ;;
+            daily)
+              if [ -z "$SNAPSHOT_ID" ]; then
+                # Get most recent daily snapshot
+                git fetch origin 'refs/heads/snapshot/daily/*:refs/remotes/origin/snapshot/daily/*'
+                BRANCH=$(git branch -r | grep 'origin/snapshot/daily/' | sort -r | head -n 1 | xargs | sed 's|origin/||')
+              else
+                BRANCH="snapshot/daily/$SNAPSHOT_ID"
+              fi
+              ;;
+            weekly)
+              if [ -z "$SNAPSHOT_ID" ]; then
+                # Get most recent weekly snapshot
+                git fetch origin 'refs/heads/snapshot/weekly/*:refs/remotes/origin/snapshot/weekly/*'
+                BRANCH=$(git branch -r | grep 'origin/snapshot/weekly/' | sort -r | head -n 1 | xargs | sed 's|origin/||')
+              else
+                BRANCH="snapshot/weekly/$SNAPSHOT_ID"
+              fi
+              ;;
+            monthly)
+              if [ -z "$SNAPSHOT_ID" ]; then
+                # Get most recent monthly release
+                LATEST_TAG=$(gh release list --limit 1 | grep 'monthly-' | awk '{print $1}')
+                if [ -z "$LATEST_TAG" ]; then
+                  echo "::error::No monthly releases found"
+                  exit 1
+                fi
+                echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+                echo "is_release=true" >> $GITHUB_OUTPUT
+              else
+                echo "tag=monthly-$SNAPSHOT_ID" >> $GITHUB_OUTPUT
+                echo "is_release=true" >> $GITHUB_OUTPUT
+              fi
+              ;;
+          esac
+
+          if [ "$TIER" != "monthly" ]; then
+            # Fetch and verify branch exists
+            git fetch origin "$BRANCH" || {
+              echo "::error::Snapshot branch $BRANCH not found"
+              exit 1
+            }
+
+            echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "::notice::Will restore from: ${BRANCH:-${tag}}"
+          echo "::endgroup::"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Checkout snapshot (branch)
+        if: steps.snapshot.outputs.is_release == 'false'
+        run: |
+          git fetch origin ${{ steps.snapshot.outputs.branch }}
+          git checkout ${{ steps.snapshot.outputs.branch }}
+
+      - name: Checkout snapshot (release)
+        if: steps.snapshot.outputs.is_release == 'true'
+        run: |
+          # For releases, download and extract
+          gh release download ${{ steps.snapshot.outputs.tag }}
+          # Extract if needed (releases may contain tarball)
+          # This depends on how monthly releases are structured
+          echo "::warning::Monthly release restore not fully implemented - may need manual extraction"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Verify snapshot contents
+        run: |
+          if [ ! -d "${{ steps.config.outputs.agent_dir }}" ]; then
+            echo "::error::Snapshot does not contain expected agent directory: ${{ steps.config.outputs.agent_dir }}"
+            exit 1
+          fi
+
+          echo "::notice::Snapshot verified - contains agent data"
+
+      - name: Display snapshot metadata
+        run: |
+          if [ -f ".backup-metadata.json" ]; then
+            echo "::group::Snapshot Metadata"
+            cat .backup-metadata.json | jq '.'
+            echo "::endgroup::"
+          fi
+
+      - name: Setup Node.js
+        if: github.event.inputs.dry_run == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Cognigy CLI
+        if: github.event.inputs.dry_run == 'false'
+        run: npm install -g @cognigy/cognigy-cli
+
+      - name: Dry run - Show what would be restored
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          echo "::group::Dry Run - Files to be restored"
+          echo ""
+          echo "The following files would be restored to Cognigy:"
+          echo ""
+          find ${{ steps.config.outputs.agent_dir }} -type f | head -n 50
+          echo ""
+          TOTAL_FILES=$(find ${{ steps.config.outputs.agent_dir }} -type f | wc -l)
+          echo "Total files: $TOTAL_FILES"
+          echo ""
+          SIZE=$(du -sh ${{ steps.config.outputs.agent_dir }} | cut -f1)
+          echo "Total size: $SIZE"
+          echo ""
+          echo "::warning::This is a DRY RUN - nothing was restored to Cognigy"
+          echo "::notice::To actually restore, re-run with dry_run=false"
+          echo "::endgroup::"
+
+      - name: Restore to Cognigy
+        if: github.event.inputs.dry_run == 'false'
+        env:
+          CAI_BASEURL: ${{ secrets.COGNIGY_BASE_URL }}
+          CAI_APIKEY: ${{ secrets.COGNIGY_API_KEY }}
+          CAI_AGENT: ${{ secrets.COGNIGY_AGENT_ID }}
+          CAI_AGENTDIR: ${{ steps.config.outputs.agent_dir }}
+        run: |
+          echo "::group::Restoring to Cognigy"
+          echo "::warning::Starting restore operation - this will overwrite current project state"
+
+          cognigy restore -y
+
+          echo "::notice::Restore completed"
+          echo "::endgroup::"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Restore Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project**: ${{ steps.config.outputs.project_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tier**: ${{ github.event.inputs.tier }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Snapshot**: ${BRANCH:-${{ steps.snapshot.outputs.tag }}}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dry Run**: ${{ github.event.inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered By**: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "✅ Dry run completed - no changes made to Cognigy" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ Restore completed - Cognigy project updated" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Important**: Verify the restore in Cognigy.AI" >> $GITHUB_STEP_SUMMARY
+          fi
+        env:
+          BRANCH: ${{ steps.snapshot.outputs.branch }}
