@@ -70,6 +70,10 @@ jobs:
             mv config.json config.json.backup
           fi
 
+          # Create agent directory (CLI expects it to exist)
+          mkdir -p "${CAI_AGENTDIR}"
+          echo "::notice::Created agent directory: ${CAI_AGENTDIR}"
+
           # Create config with credentials for CLI
           cat > config.json <<EOF
           {
