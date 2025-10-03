@@ -170,7 +170,7 @@ jobs:
           echo "::notice::To actually restore, re-run with dry_run=false"
           echo "::endgroup::"
 
-      - name: Restore to Cognigy
+      - name: Create temporary Cognigy CLI config
         if: github.event.inputs.dry_run == 'false'
         env:
           CAI_BASEURL: ${{ secrets.COGNIGY_BASE_URL }}
@@ -178,13 +178,49 @@ jobs:
           CAI_AGENT: ${{ secrets.COGNIGY_AGENT_ID }}
           CAI_AGENTDIR: ${{ steps.config.outputs.agent_dir }}
         run: |
+          # Backup existing config.json if it exists
+          if [ -f "config.json" ]; then
+            mv config.json config.json.backup
+          fi
+
+          # Create config with credentials for CLI
+          # Cognigy CLI requires all these fields
+          cat > config.json <<EOF
+          {
+            "baseUrl": "${CAI_BASEURL}",
+            "apiKey": "${CAI_APIKEY}",
+            "agent": "${CAI_AGENT}",
+            "agentDir": "./${CAI_AGENTDIR}",
+            "filePath": "./config.json",
+            "playbookTimeoutSeconds": "10"
+          }
+          EOF
+
+          echo "::notice::Created temporary config.json for Cognigy CLI"
+
+      - name: Restore to Cognigy
+        if: github.event.inputs.dry_run == 'false'
+        run: |
           echo "::group::Restoring to Cognigy"
           echo "::warning::Starting restore operation - this will overwrite current project state"
+
+          # Unset environment variables so they don't override config.json
+          # Cognigy CLI reads env vars first, then config.json
+          unset CAI_BASEURL CAI_APIKEY CAI_AGENT CAI_AGENTDIR
 
           cognigy restore -y
 
           echo "::notice::Restore completed"
           echo "::endgroup::"
+
+      - name: Restore original config
+        if: always() && github.event.inputs.dry_run == 'false'
+        run: |
+          # Restore original config.json (remove credentials)
+          if [ -f "config.json.backup" ]; then
+            mv config.json.backup config.json
+            echo "::notice::Restored original config.json"
+          fi
 
       - name: Summary
         if: always()
