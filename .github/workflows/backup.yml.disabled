@@ -67,20 +67,53 @@ jobs:
         run: |
           echo "::group::Cloning Cognigy project"
 
+          # Debug: Show environment (without exposing secrets)
+          echo "Base URL: ${CAI_BASEURL}"
+          echo "Agent ID: ${CAI_AGENT}"
+          echo "Agent Dir: ${CAI_AGENTDIR}"
+          echo "Clone Type: ${{ steps.config.outputs.clone_type }}"
+
           # Clone based on configured type
           CLONE_TYPE="${{ steps.config.outputs.clone_type }}"
 
+          echo "Running: cognigy clone..."
           if [ "$CLONE_TYPE" = "agent" ]; then
-            cognigy clone -y
+            cognigy clone -y || {
+              echo "::error::cognigy clone command failed with exit code $?"
+              echo "::group::Listing directory contents"
+              ls -la
+              echo "::endgroup::"
+              exit 1
+            }
           else
-            cognigy clone --type "$CLONE_TYPE" -y
+            cognigy clone --type "$CLONE_TYPE" -y || {
+              echo "::error::cognigy clone command failed with exit code $?"
+              echo "::group::Listing directory contents"
+              ls -la
+              echo "::endgroup::"
+              exit 1
+            }
           fi
 
+          echo "::endgroup::"
+
+          # Show what was created
+          echo "::group::Directory contents after clone"
+          ls -la
+          if [ -d "$CAI_AGENTDIR" ]; then
+            echo "Agent directory exists:"
+            ls -la "$CAI_AGENTDIR"
+          fi
           echo "::endgroup::"
 
           # Verify clone succeeded
           if [ ! -d "$CAI_AGENTDIR" ]; then
             echo "::error::Clone failed - $CAI_AGENTDIR directory not created"
+            echo "::error::This could mean:"
+            echo "  - Invalid API credentials (check secrets)"
+            echo "  - Agent ID doesn't exist"
+            echo "  - Network/API error"
+            echo "  - Permissions issue with API key"
             exit 1
           fi
 
