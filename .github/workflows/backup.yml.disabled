@@ -70,17 +70,16 @@ jobs:
             mv config.json config.json.backup
           fi
 
-          # Create agent directory (CLI expects it to exist)
-          mkdir -p "${CAI_AGENTDIR}"
-          echo "::notice::Created agent directory: ${CAI_AGENTDIR}"
-
           # Create config with credentials for CLI
+          # Cognigy CLI requires all these fields
           cat > config.json <<EOF
           {
             "baseUrl": "${CAI_BASEURL}",
             "apiKey": "${CAI_APIKEY}",
             "agent": "${CAI_AGENT}",
-            "agentDir": "${CAI_AGENTDIR}"
+            "agentDir": "./${CAI_AGENTDIR}",
+            "filePath": "./config.json",
+            "playbookTimeoutSeconds": "10"
           }
           EOF
 
