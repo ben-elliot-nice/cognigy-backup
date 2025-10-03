@@ -197,7 +197,7 @@ jobs:
           }
           EOF
 
-          git add .backup-metadata.json
+          git add -f .backup-metadata.json
 
           # Commit snapshot
           git commit -m "Snapshot: $TIMESTAMP
