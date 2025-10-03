@@ -86,22 +86,20 @@ jobs:
           echo "::notice::Created temporary config.json for Cognigy CLI"
 
       - name: Clone Cognigy project
-        env:
-          CAI_BASEURL: ${{ secrets.COGNIGY_BASE_URL }}
-          CAI_APIKEY: ${{ secrets.COGNIGY_API_KEY }}
-          CAI_AGENT: ${{ secrets.COGNIGY_AGENT_ID }}
-          CAI_AGENTDIR: ${{ steps.config.outputs.agent_dir }}
         run: |
           echo "::group::Cloning Cognigy project"
 
-          # Debug: Show environment (without exposing secrets)
-          echo "Base URL: ${CAI_BASEURL}"
-          echo "Agent ID: ${CAI_AGENT}"
-          echo "Agent Dir: ${CAI_AGENTDIR}"
-          echo "Clone Type: ${{ steps.config.outputs.clone_type }}"
-
-          # Clone based on configured type
+          # Store values for later verification
           CLONE_TYPE="${{ steps.config.outputs.clone_type }}"
+          AGENT_DIR="${{ steps.config.outputs.agent_dir }}"
+
+          # Debug: Show what we're cloning (without exposing secrets)
+          echo "Agent Dir: $AGENT_DIR"
+          echo "Clone Type: $CLONE_TYPE"
+
+          # Unset environment variables so they don't override config.json
+          # Cognigy CLI reads env vars first, then config.json
+          unset CAI_BASEURL CAI_APIKEY CAI_AGENT CAI_AGENTDIR
 
           echo "Running: cognigy clone..."
           if [ "$CLONE_TYPE" = "agent" ]; then
@@ -133,15 +131,15 @@ jobs:
           # Show what was created
           echo "::group::Directory contents after clone"
           ls -la
-          if [ -d "$CAI_AGENTDIR" ]; then
+          if [ -d "$AGENT_DIR" ]; then
             echo "Agent directory exists:"
-            ls -la "$CAI_AGENTDIR"
+            ls -la "$AGENT_DIR"
           fi
           echo "::endgroup::"
 
           # Verify clone succeeded
-          if [ ! -d "$CAI_AGENTDIR" ]; then
-            echo "::error::Clone failed - $CAI_AGENTDIR directory not created"
+          if [ ! -d "$AGENT_DIR" ]; then
+            echo "::error::Clone failed - $AGENT_DIR directory not created"
             echo "::error::This could mean:"
             echo "  - Invalid API credentials (check secrets)"
             echo "  - Agent ID doesn't exist"
