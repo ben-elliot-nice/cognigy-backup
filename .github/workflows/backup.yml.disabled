@@ -58,6 +58,30 @@ jobs:
       - name: Install Cognigy CLI
         run: npm install -g @cognigy/cognigy-cli
 
+      - name: Create temporary Cognigy CLI config
+        env:
+          CAI_BASEURL: ${{ secrets.COGNIGY_BASE_URL }}
+          CAI_APIKEY: ${{ secrets.COGNIGY_API_KEY }}
+          CAI_AGENT: ${{ secrets.COGNIGY_AGENT_ID }}
+          CAI_AGENTDIR: ${{ steps.config.outputs.agent_dir }}
+        run: |
+          # Backup existing config.json if it exists
+          if [ -f "config.json" ]; then
+            mv config.json config.json.backup
+          fi
+
+          # Create config with credentials for CLI
+          cat > config.json <<EOF
+          {
+            "baseUrl": "${CAI_BASEURL}",
+            "apiKey": "${CAI_APIKEY}",
+            "agent": "${CAI_AGENT}",
+            "agentDir": "${CAI_AGENTDIR}"
+          }
+          EOF
+
+          echo "::notice::Created temporary config.json for Cognigy CLI"
+
       - name: Clone Cognigy project
         env:
           CAI_BASEURL: ${{ secrets.COGNIGY_BASE_URL }}
@@ -180,6 +204,15 @@ jobs:
 
           echo "::endgroup::"
           echo "::notice::Snapshot created and pushed to snapshot/hourly"
+
+      - name: Restore original config
+        if: always()
+        run: |
+          # Restore original config.json (remove credentials)
+          if [ -f "config.json.backup" ]; then
+            mv config.json.backup config.json
+            echo "::notice::Restored original config.json"
+          fi
 
       - name: Cleanup temp branch
         if: always()
