@@ -154,12 +154,17 @@ jobs:
           # Get most recent weekly branch
           git fetch origin 'refs/heads/snapshot/weekly/*:refs/remotes/origin/snapshot/weekly/*'
 
-          LATEST_WEEKLY=$(git branch -r | grep 'origin/snapshot/weekly/' | sort -r | head -n 1 | xargs)
+          LATEST_WEEKLY_REMOTE=$(git branch -r | grep 'origin/snapshot/weekly/' | sort -r | head -n 1 | xargs)
 
-          if [ -z "$LATEST_WEEKLY" ]; then
+          if [ -z "$LATEST_WEEKLY_REMOTE" ]; then
             echo "::warning::No weekly snapshots found to promote"
             exit 0
           fi
+
+          # Remove 'origin/' prefix for the target branch
+          LATEST_WEEKLY=$(echo "$LATEST_WEEKLY_REMOTE" | sed 's|origin/||')
+
+          echo "::notice::Latest weekly snapshot: $LATEST_WEEKLY"
 
           # Create month identifier (YYYY-MM)
           MONTH=$(date -u +%Y-%m)
